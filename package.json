@@ -1,5 +1,5 @@
 {
-  "name": "bkit.js",
+  "name": "bkit",
   "version": "1.0.0",
   "description": "A utility kit for encoding and decoding binary data",
   "author": {
