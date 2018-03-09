@@ -1,0 +1,20 @@
+{
+  "name": "bkit.js",
+  "version": "1.0.0",
+  "description": "A utility kit for encoding and decoding binary data",
+  "author": {
+    "name": "Blake Regalia",
+    "email": "blake.regalia@gmail.com"
+  },
+  "files": "lib",
+  "main": "lib/main/module.js",
+  "keywords": [
+    "buffer",
+    "binary",
+    "util"
+  ],
+  "repository": "blake-regalia/bkit.js.git",
+  "scripts": {},
+  "devDependencies": {},
+  "dependencies": {}
+}
