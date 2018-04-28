@@ -1,6 +1,6 @@
 {
   "name": "bkit",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "A utility kit for encoding and decoding binary data",
   "author": {
     "name": "Blake Regalia",
