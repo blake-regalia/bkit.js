@@ -6,8 +6,8 @@
     "name": "Blake Regalia",
     "email": "blake.regalia@gmail.com"
   },
-  "files": "lib",
-  "main": "lib/main/module.js",
+  "files": "src",
+  "main": "src/main/module.js",
   "keywords": [
     "buffer",
     "binary",

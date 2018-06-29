@@ -43,15 +43,27 @@ const H_ENCODING_TO_TYPED_ARRAY = {
 };
 
 // creates the smallest uint typed array that satisfies the requisite `range`
-const uint_array = n_range => n_range <= 0xff
-	? Uint8Array
-	: (n_range <= 0xffff
-		? Uint16Array
-		: (n_range <= 0xffffffff
-			? Uint32Array
-			: (n_range <= Math.pow(2, 53)
-				? Float64Array
-				: new RangeError(`uint size too large: ${n_range}`))));
+const uint_array = (n_range) => {
+	if(n_range <= 0xff) {
+		return Uint8Array;
+	}
+	else if(n_range <= 0xffff) {
+		return Uint16Array;
+	}
+	else if(n_range <= 0xffffffff) {
+		return Uint32Array;
+	}
+	else if(n_range <= Number.MAX_SAFE_INTEGER) {
+		return Float64Array;
+	}
+	else {
+		if(!Number.isInteger(n_range)) {
+			throw new TypeError(`uint size '${n_range}' is not an integer!`);
+		}
+
+		throw new RangeError(`uint size too large: ${n_range}`);
+	}
+};
 
 const new_uint_array = (n_range, n_size) => new (uint_array(n_range))(n_size);
 
