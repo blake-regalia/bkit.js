@@ -389,6 +389,7 @@ class buffer_decoder {
 		Object.assign(this, {
 			contents: at_contents,
 			read: 0,
+			referenced: false,
 		});
 	}
 
@@ -494,6 +495,7 @@ class buffer_decoder {
 		return s_ntu8;
 	}
 
+	// extract typed array and intelligently conserve memory when mem-aligning
 	typed_array() {
 		let at_contents = this.contents;
 
@@ -503,13 +505,137 @@ class buffer_decoder {
 		// number of elements in array
 		let nl_values = this.vuint();
 
-		// create typed array instance
-		let at_values = new H_ENCODING_TO_TYPED_ARRAY[x_type](at_contents.buffer, at_contents.byteOffset+this.read, nl_values);
+		// offet of typed array's start
+		let ib_offset = at_contents.byteOffset + this.read;
+
+		// typed array class
+		let dc_typed_array = H_ENCODING_TO_TYPED_ARRAY[x_type];
+
+		// prep typed array instance
+		let at_values;
+
+		// not mem-aligned!
+		if(ib_offset % dc_typed_array.BYTES_PER_ELEMENT) {
+			// contents are referenced
+			if(this.referenced) {
+				throw new Error(`cannot safely extract typed array into new allocated memory segment since older array buffer is still referenced by previous call to 'buffer_decoder#sub'`);
+			}
+
+			// allocate new mem-aligned segment
+			let ab_contents = new ArrayBuffer(at_contents.byteLength - ib_offset);
+
+			// create byte-view over segment
+			let at8_contents = new Uint8Array(ab_contents);
+
+			// copy contents over
+			at8_contents.set(at_contents.subarray(ib_offset));
+
+			// discard ref to previous memory segment
+			this.contents = at8_contents;
+
+			// reset read head
+			this.read = 0;
+
+			// create typed array instance
+			at_values = new dc_typed_array(ab_contents, 0, nl_values);
+		}
+		else {
+			// create typed array instance
+			at_values = new dc_typed_array(at_contents.buffer, ib_offset, nl_values);
+		}
 
 		// increment read offset
 		this.read += at_values.byteLength;
 
 		return at_values;
+	}
+
+	// extract typed array and possibly waste tons of memory
+	typed_array_grow() {
+		let at_contents = this.contents;
+
+		// type of array
+		let x_type = at_contents[this.read++];
+
+		// number of elements in array
+		let nl_values = this.vuint();
+
+		// offet of typed array's start
+		let ib_offset = at_contents.byteOffset + this.read;
+
+		// typed array class
+		let dc_typed_array = H_ENCODING_TO_TYPED_ARRAY[x_type];
+
+		// prep typed array instance
+		let at_values;
+
+		// not mem-aligned!
+		if(ib_offset % dc_typed_array.BYTES_PER_ELEMENT) {
+			// allocate new mem-aligned segment
+			let ab_values = new ArrayBuffer(nl_values*dc_typed_array.BYTES_PER_ELEMENT);
+
+			// create typed array instance
+			at_values = new dc_typed_array(ab_values, 0, nl_values);
+		}
+		else {
+			// create typed array instance
+			at_values = new dc_typed_array(at_contents.buffer, ib_offset, nl_values);
+		}
+
+		// increment read offset
+		this.read += at_values.byteLength;
+
+		return at_values;
+	}
+
+	grab(nb_sub=null) {
+		let {
+			contents: at_contents,
+			read: i_read,
+		} = this;
+		if(null === nb_sub) nb_sub = at_contents.length - i_read;
+
+		// beyond this grab
+		let i_beyond = i_read + nb_sub;
+
+		// create new buffer for sub
+		let ab_sub = new ArrayBuffer(nb_sub);
+
+		// create byte-view over segment
+		let at_sub = new Uint8Array(ab_sub);
+
+		// copy contents over
+		at_sub.set(at_contents.subarray(i_read, i_read+nb_sub));
+
+		// end-of-buffer
+		if(at_contents.length === i_beyond) {
+			// not referenced
+			if(!this.referenced) {
+				// free buffer
+				this.contents = new Uint8Array(0);
+
+				// return new contents
+				return at_sub;
+			}
+		}
+
+		// create new buffer for contents
+		let ab_contents = new ArrayBuffer(at_contents.length - i_beyond);
+
+		// create byte-view over segment
+		let at8_contents = new Uint8Array(ab_contents);
+
+		// copy contents over
+		at8_contents.set(at_contents.subarray(i_beyond));
+
+		// update buffer
+		this.contents = at8_contents;
+
+		// reset read index
+		this.read = 0;
+
+		// return new contents
+		return at_sub;
 	}
 
 	sub(nb_sub=null) {
@@ -519,6 +645,10 @@ class buffer_decoder {
 		} = this;
 		if(null === nb_sub) nb_sub = at_contents.length - i_read;
 		this.read += nb_sub;
+
+		// record that the underlying buffer is still referenced
+		this.referenced = true;
+
 		return at_contents.subarray(i_read, i_read+nb_sub);
 	}
 }
