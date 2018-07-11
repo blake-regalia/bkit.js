@@ -382,6 +382,120 @@ class bitsequence_writer {
 	}
 }
 
+let ATU8_POPCOUNTS_16 = null;
+const load_popcounts = () => {
+	ATU8_POPCOUNTS_16 = new Uint8Array(Uint32Array.from([
+		@*{
+			let x_range = 1 << 16;
+			for(let i_value=0; i_value<x_range; i_value+=4) {
+				let x = i_value;
+				x -= (x >> 1) & 0x55555555;
+				x = (x & 0x33333333) + ((x >> 2) & 0x33333333);
+				x = (x + (x >> 4)) & 0x0f0f0f0f;
+				let s_3 = ((x * 0x01010101) >> 24).toString(16).padStart(2, '0');
+
+				x = i_value + 1;
+				x -= (x >> 1) & 0x55555555;
+				x = (x & 0x33333333) + ((x >> 2) & 0x33333333);
+				x = (x + (x >> 4)) & 0x0f0f0f0f;
+				let s_2 = ((x * 0x01010101) >> 24).toString(16).padStart(2, '0');
+
+				x = i_value + 2;
+				x -= (x >> 1) & 0x55555555;
+				x = (x & 0x33333333) + ((x >> 2) & 0x33333333);
+				x = (x + (x >> 4)) & 0x0f0f0f0f;
+				let s_1 = ((x * 0x01010101) >> 24).toString(16).padStart(2, '0');
+
+				x = i_value + 3;
+				x -= (x >> 1) & 0x55555555;
+				x = (x & 0x33333333) + ((x >> 2) & 0x33333333);
+				x = (x + (x >> 4)) & 0x0f0f0f0f;
+				let s_0 = ((x * 0x01010101) >> 24).toString(16).padStart(2, '0');
+
+				// let x = i_value;
+				// x = x - ((x >> 1) & 0x55555555);
+				// x = (x & 0x33333333) + ((x >> 2) & 0x33333333);
+				// let s_3 = ((((x + (x >> 4)) & 0x0F0F0F0F) * 0x01010101) >> 24).toString('16').padStart(8, '0')+', ';
+
+				yield `0x${s_0}${s_1}${s_2}${s_3}, `;
+
+				if(!((i_value+4) % (4 * 32))) yield '\n\t\t';
+			}
+		}
+	]).buffer);
+};
+
+class bitsequence_reader {
+	constructor(at_sequence) {
+		let ab_contents = ArrayBuffer.isView(at_sequence)? at_sequence.buffer: at_sequence;
+		if(!ATU8_POPCOUNTS_16) load_popcounts();
+
+		Object.assign(this, {
+			contents: ab_contents,
+			view_u8: new Uint8Array(ab_contents),
+			view_u16: new Uint16Array(ab_contents),
+			view_u32: new Uint32Array(ab_contents),
+			read: 0,
+		});
+	}
+
+	select_1(i_item) {
+		let {
+			view_u8: atu8_view,
+			view_u16: atu16_view,
+		} = this;
+
+		let c_pop = 0;
+		let i16_target = i_item >> 4;
+		let i16_scan = 0;
+		for(;; i16_scan++) {
+			let n_popcount = ATU8_POPCOUNTS_16[atu16_view[i16_scan]];
+			c_pop += n_popcount;
+			if(c_pop >= i_item) {
+				c_pop -= n_popcount;
+				break;
+			}
+		}
+
+		let ib_target = i16_scan << 1;
+		let xb_char = atu8_view[ib_target];
+		let ii_bit = 0;
+		for(; c_pop<i_item; ii_bit++) {
+			if(xb_char & 0x80) c_pop += 1;
+			xb_char <<= 1;
+
+			if(7 === ii_bit) xb_char = atu8_view[ib_target+1];
+		}
+
+		return (i16_scan << 4) + ii_bit;
+	}
+
+	rank_1(ii_target) {
+		let {
+			view_u8: atu8_view,
+			view_u16: atu16_view,
+		} = this;
+
+		let c_pop = 0;
+		let i16_target = ii_target >> 4;
+		for(let i16_scan=0; i16_scan<i16_target; i16_scan++) {
+			c_pop += ATU8_POPCOUNTS_16[atu16_view[i16_scan]];
+		}
+
+		let ii_intra = ii_target % 16;
+		let ib_target = i16_target << 1;
+		let xb_char = atu8_view[ib_target];
+		for(let ii_bit=0; ii_bit<ii_intra; ii_bit++) {
+			if(xb_char & 0x80) c_pop += 1;
+			xb_char <<= 1;
+
+			if(7 === ii_bit) xb_char = atu8_view[ib_target+1];
+		}
+
+		return c_pop;
+	}
+}
+
 
 
 class buffer_decoder {
@@ -614,6 +728,9 @@ class buffer_decoder {
 				// free buffer
 				this.contents = new Uint8Array(0);
 
+				// update read index
+				this.read = at_contents.length;
+
 				// return new contents
 				return at_sub;
 			}
@@ -631,7 +748,7 @@ class buffer_decoder {
 		// update buffer
 		this.contents = at8_contents;
 
-		// reset read index
+		// update read index
 		this.read = 0;
 
 		// return new contents
@@ -712,7 +829,9 @@ module.exports = Object.assign({
 
 	buffer_writer,
 	word_writer,
+
 	bitsequence_writer,
+	bitsequence_reader,
 
 	word_reader,
 

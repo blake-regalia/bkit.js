@@ -14,7 +14,9 @@
     "util"
   ],
   "repository": "blake-regalia/bkit.js.git",
-  "scripts": {},
+  "scripts": {
+    "build": "mkdir -p build && jmacs src/main/module.js.jmacs > build/main.js"
+  },
   "devDependencies": {},
   "dependencies": {}
 }
