@@ -7,7 +7,7 @@
     "email": "blake.regalia@gmail.com"
   },
   "files": "build",
-  "main": "build/main/module.js",
+  "main": "build/main.js",
   "keywords": [
     "buffer",
     "binary",
