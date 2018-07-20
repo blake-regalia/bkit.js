@@ -6,8 +6,8 @@
     "name": "Blake Regalia",
     "email": "blake.regalia@gmail.com"
   },
-  "files": "src",
-  "main": "src/main/module.js",
+  "files": "build",
+  "main": "build/main/module.js",
   "keywords": [
     "buffer",
     "binary",
@@ -17,6 +17,8 @@
   "scripts": {
     "build": "mkdir -p build && jmacs src/main/module.js.jmacs > build/main.js"
   },
-  "devDependencies": {},
+  "devDependencies": {
+    "emk": "^1.0.1"
+  },
   "dependencies": {}
 }

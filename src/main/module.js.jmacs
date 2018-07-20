@@ -5,7 +5,7 @@ const AT_UTF_16_TOKEN = new Uint8Array([0xfe]);
 let [D_TEXT_ENCODER, D_TEXT_DECODER]
 	= 'undefined' === typeof Buffer
 		? ('undefined' === typeof TextEncoder
-			? [new (require('util').TextEncoder)(), new (require('util').TextDecoder)()]
+			? [new (require('util').TextEncoder)(), new (require('util').TextDecoder)()]  // eslint-disable-line global-require
 			: [new TextEncoder(), new TextDecoder()])
 		: [{encode:s => Buffer.from(s, 'utf-8')}, {decode:at => Buffer.from(at).toString('utf-8')}];
 
@@ -446,7 +446,6 @@ class bitsequence_reader {
 		} = this;
 
 		let c_pop = 0;
-		let i16_target = i_item >> 4;
 		let i16_scan = 0;
 		for(;; i16_scan++) {
 			let n_popcount = ATU8_POPCOUNTS_16[atu16_view[i16_scan]];
