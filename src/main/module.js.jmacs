@@ -1,5 +1,5 @@
 
-const N_DEFAULT_ALLOCATION_SIZE = 64 * 1024;  // 64 KiB
+const NB_DEFAULT_ALLOCATION = 64 * 1024;  // 64 KiB
 const AT_UTF_16_TOKEN = new Uint8Array([0xfe]);
 
 let [D_TEXT_ENCODER, D_TEXT_DECODER]
@@ -9,16 +9,6 @@ let [D_TEXT_ENCODER, D_TEXT_DECODER]
 			: [new TextEncoder(), new TextDecoder()])
 		: [{encode:s => Buffer.from(s, 'utf-8')}, {decode:at => Buffer.from(at).toString('utf-8')}];
 
-const encode_utf_8 = s_chunk => D_TEXT_ENCODER.encode(s_chunk);
-const encode_utf_16 = (s_chunk) => {
-	// encode chunk as utf-16le
-	let ab_chunk = Buffer.from(s_chunk, 'utf-16le');
-
-	// prefix buffer w/ utf-16 token
-	return Buffer.concat([AT_UTF_16_TOKEN, ab_chunk], ab_chunk.length + 1);
-};
-
-const decode_utf_8 = at_chunk => D_TEXT_DECODER.decode(at_chunk);
 
 const X_ENCODING_TYPED_ARRAY_INT8 = 0x11;
 const X_ENCODING_TYPED_ARRAY_UINT8 = 0x21;
@@ -29,6 +19,8 @@ const X_ENCODING_TYPED_ARRAY_INT32 = 0x14;
 const X_ENCODING_TYPED_ARRAY_UINT32 = 0x24;
 const X_ENCODING_TYPED_ARRAY_FLOAT32 = 0x44;
 const X_ENCODING_TYPED_ARRAY_FLOAT64 = 0x48;
+const X_ENCODING_TYPED_ARRAY_BIGINT64 = 0x58;
+const X_ENCODING_TYPED_ARRAY_BIGUINT64 = 0x68;
 
 const H_ENCODING_TO_TYPED_ARRAY = {
 	[X_ENCODING_TYPED_ARRAY_INT8]: Int8Array,
@@ -40,11 +32,16 @@ const H_ENCODING_TO_TYPED_ARRAY = {
 	[X_ENCODING_TYPED_ARRAY_UINT32]: Uint32Array,
 	[X_ENCODING_TYPED_ARRAY_FLOAT32]: Float32Array,
 	[X_ENCODING_TYPED_ARRAY_FLOAT64]: Float64Array,
+	[X_ENCODING_TYPED_ARRAY_BIGINT64]: BigInt64Array,
+	[X_ENCODING_TYPED_ARRAY_BIGUINT64]: BigUint64Array,
 };
 
 // creates the smallest uint typed array that satisfies the requisite `range`
 const uint_array = (n_range) => {
-	if(n_range <= 0xff) {
+	if(!Number.isInteger(n_range) && 'bigint' !== typeof n_range) {
+		throw new TypeError(`uint size '${n_range}' is not an integer!`);
+	}
+	else if(n_range <= 0xff) {
 		return Uint8Array;
 	}
 	else if(n_range <= 0xffff) {
@@ -53,49 +50,62 @@ const uint_array = (n_range) => {
 	else if(n_range <= 0xffffffff) {
 		return Uint32Array;
 	}
-	else if(n_range <= Number.MAX_SAFE_INTEGER) {
-		return Float64Array;
-	}
-	else {
-		if(!Number.isInteger(n_range)) {
-			throw new TypeError(`uint size '${n_range}' is not an integer!`);
-		}
-
-		throw new RangeError(`uint size too large: ${n_range}`);
+	else if(n_range <= 0xffffffffffffffffn) {
+		return BigUint64Array;
 	}
 };
 
-const new_uint_array = (n_range, n_size) => new (uint_array(n_range))(n_size);
-
-class buffer_writer {
+class BufferEncoder {
 	constructor(h_config={}) {
 		let {
 			malloc: b_force_malloc=false,
-			size: n_allocation_size=N_DEFAULT_ALLOCATION_SIZE,
-			grow: n_grow_size=N_DEFAULT_ALLOCATION_SIZE,
+			size: nb_allocation=NB_DEFAULT_ALLOCATION,
+			grow: nb_grow=NB_DEFAULT_ALLOCATION,
 		} = h_config;
 
 		let at_contents;
 		if(b_force_malloc) {
-			let ab_alloc = new ArrayBuffer(n_allocation_size);
+			let ab_alloc = new ArrayBuffer(nb_allocation);
 			at_contents = new Uint8Array(ab_alloc);
 		}
 		else {
-			at_contents = new Uint8Array(n_allocation_size);
+			at_contents = new Uint8Array(nb_allocation);
 		}
 
 		Object.assign(this, {
-			contents: at_contents,
-			write: 0,
-			grow: n_grow_size,
+			_at_contents: at_contents,
+			_ib_write: 0,
+			_nb_grow: nb_grow,
 		});
 	}
 
+	get write() {
+		return this._ib_write;
+	}
+
+	reset() {
+		this._ib_write = 0;
+	}
+
+	slice(ib_start=0, ib_end=-1) {
+		return this._at_contents.slice(ib_start, ib_end);
+	}
+
+	// copy out the buffer so we can re-use existing memory region
+	close() {
+		return this._at_contents.slice(0, this._ib_write);
+	}
+
+	// create view on existing memory region
+	view() {
+		return this._at_contents.subarray(0, this._ib_write);
+	}
+
 	append_byte(x_byte) {
-		let at_contents = this.contents;
-		if(this.write < at_contents.length) {
-			at_contents[this.write++] = x_byte;
-			return this.write;
+		let at_contents = this._at_contents;
+		if(this._ib_write < at_contents.length) {
+			at_contents[this._ib_write++] = x_byte;
+			return this._ib_write;
 		}
 		else {
 			return this.append([x_byte]);
@@ -103,12 +113,12 @@ class buffer_writer {
 	}
 
 	append_bytes_2(x_byte_a, x_byte_b) {
-		let at_contents = this.contents;
-		let i_write = this.write;
-		if(i_write < at_contents.length - 1) {
-			at_contents[i_write] = x_byte_a;
-			at_contents[i_write+1] = x_byte_b;
-			return this.write += 2;
+		let at_contents = this._at_contents;
+		let ib_write = this._ib_write;
+		if(ib_write < at_contents.length - 1) {
+			at_contents[ib_write] = x_byte_a;
+			at_contents[ib_write+1] = x_byte_b;
+			return this._ib_write += 2;
 		}
 		else {
 			return this.append([x_byte_a, x_byte_b]);
@@ -116,13 +126,13 @@ class buffer_writer {
 	}
 
 	append_bytes_3(x_byte_a, x_byte_b, x_byte_c) {
-		let at_contents = this.contents;
-		let i_write = this.write;
-		if(i_write < at_contents.length - 2) {
-			at_contents[i_write] = x_byte_a;
-			at_contents[i_write+1] = x_byte_b;
-			at_contents[i_write+2] = x_byte_c;
-			return this.write += 3;
+		let at_contents = this._at_contents;
+		let ib_write = this._ib_write;
+		if(ib_write < at_contents.length - 2) {
+			at_contents[ib_write] = x_byte_a;
+			at_contents[ib_write+1] = x_byte_b;
+			at_contents[ib_write+2] = x_byte_c;
+			return this._ib_write += 3;
 		}
 		else {
 			return this.append([x_byte_a, x_byte_b, x_byte_c]);
@@ -130,14 +140,14 @@ class buffer_writer {
 	}
 
 	append_bytes_4(x_byte_a, x_byte_b, x_byte_c, x_byte_d) {
-		let at_contents = this.contents;
-		let i_write = this.write;
-		if(i_write < at_contents.length - 3) {
-			at_contents[i_write] = x_byte_a;
-			at_contents[i_write+1] = x_byte_b;
-			at_contents[i_write+2] = x_byte_c;
-			at_contents[i_write+3] = x_byte_d;
-			return this.write += 4;
+		let at_contents = this._at_contents;
+		let ib_write = this._ib_write;
+		if(ib_write < at_contents.length - 3) {
+			at_contents[ib_write] = x_byte_a;
+			at_contents[ib_write+1] = x_byte_b;
+			at_contents[ib_write+2] = x_byte_c;
+			at_contents[ib_write+3] = x_byte_d;
+			return this._ib_write += 4;
 		}
 		else {
 			return this.append([x_byte_a, x_byte_b, x_byte_c, x_byte_d]);
@@ -145,53 +155,33 @@ class buffer_writer {
 	}
 
 	append(at_item) {
-		let i_write = this.write;
-		let at_contents = this.contents;
+		let ib_write = this._ib_write;
+		let at_contents = this._at_contents;
 
-		let nl_contents = at_contents.length;
-		let nl_item = at_item.length;
+		let nb_contents = at_contents.length;
+		let nb_item = at_item.length;
 
 		// append item will overflow current buffer; figure out how much to alloc
-		let i_end = i_write + nl_item;
-		let x_overflow = i_end - nl_contents;
+		let ib_end = ib_write + nb_item;
+		let x_overflow = ib_end - nb_contents;
 		if(x_overflow > 0) {
 			// alloc new buffer and copy contents
-			let nl_grow = nl_contents + (Math.ceil(x_overflow / this.grow) * this.grow);
-			let at_alloc = new Uint8Array(nl_grow);
+			let nb_grow = nb_contents + (Math.ceil(x_overflow / this._nb_grow) * this._nb_grow);
+			let at_alloc = new Uint8Array(nb_grow);
 			at_alloc.set(at_contents);
-			this.contents = at_contents = at_alloc;
+			this._at_contents = at_contents = at_alloc;
 		}
 
 		// copy item
-		at_contents.set(at_item, i_write);
-		return this.write = i_end;
-	}
-
-	slice(i_start=0, i_end=-1) {
-		return this.contents.slice(i_start, i_end);
-	}
-
-	close() {
-		return this.contents.slice(0, this.write);
-	}
-}
-
-class buffer_encoder {
-	static from_buffer(kb) {
-		return new buffer_encoder(null, kb);
-	}
-
-	constructor(h_config={}, kb=null) {
-		Object.assign(this, {buffer:kb || new buffer_writer(h_config)});
+		at_contents.set(at_item, ib_write);
+		return this._ib_write = ib_end;
 	}
 
 	ntu8_string(s_value) {
-		return this.buffer.append(D_TEXT_ENCODER.encode(s_value+'\0'));
+		return this.append(D_TEXT_ENCODER.encode(s_value+'\0'));
 	}
 
-	typed_array(at_values) {
-		let kb = this.buffer;
-
+	meta_typed_array(at_values) {
 		let x_type;
 		if(at_values instanceof Uint8Array) {
 			x_type = X_ENCODING_TYPED_ARRAY_UINT8;
@@ -220,22 +210,31 @@ class buffer_encoder {
 		else if(at_values instanceof Float64Array) {
 			x_type = X_ENCODING_TYPED_ARRAY_FLOAT64;
 		}
+		else if(at_values instanceof BigInt64Array) {
+			x_type = X_ENCODING_TYPED_ARRAY_BIGINT64;
+		}
+		else if(at_values instanceof BigUint64Array) {
+			x_type = X_ENCODING_TYPED_ARRAY_BIGUINT64;
+		}
+
+		// typed array type
+		this.append_byte(x_type);
+
+		// number of elements
+		this.vuint(at_values.length);
+	}
+
+	typed_array(at_values) {
+		this.meta_typed_array(at_values);
 
 		// not uint8 array
 		let at_append = new Uint8Array(at_values.buffer, at_values.byteOffset, at_values.byteLength);
 
-		// typed array type
-		kb.append_byte(x_type);
-
-		// number of elements
-		this.vuint(at_values.length);
-
 		// values
-		this.buffer.append(at_append);
+		this.append(at_append);
 	}
 
 	vuint(x_value) {
-		let kb = this.buffer;
 		// 0x80: 1
 		// 0x4000: 2
 		// 0x200000: 3
@@ -253,24 +252,24 @@ class buffer_encoder {
 		if(x_value <= 0x7fffffff) {
 			if(x_value <= 0x3fff) {
 				if(x_value <= 0x7f) {
-					return kb.append_byte(x_value);
+					return this.append_byte(x_value);
 				}
 				else {
-					return kb.append_bytes_2(
+					return this.append_bytes_2(
 						0x80 | (x_value & 0x7f),
 						x_value >> 7
 					);
 				}
 			}
 			else if(x_value <= 0x1fffff) {
-				return kb.append_bytes_3(
+				return this.append_bytes_3(
 					0x80 | (x_value & 0x7f),
 					0x80 | ((x_value >> 7) & 0x7f),
 					x_value >> 14
 				);
 			}
 			else if(x_value <= 0xfffffff) {
-				return kb.append_bytes_4(
+				return this.append_bytes_4(
 					0x80 | (x_value & 0x7f),
 					0x80 | ((x_value >> 7) & 0x7f),
 					0x80 | ((x_value >> 14) & 0x7f),
@@ -278,7 +277,7 @@ class buffer_encoder {
 				);
 			}
 			else {
-				return kb.append([
+				return this.append([
 					0x80 | (x_value & 0x7f),
 					0x80 | ((x_value >> 7) & 0x7f),
 					0x80 | ((x_value >> 14) & 0x7f),
@@ -296,7 +295,7 @@ class buffer_encoder {
 			if(x_hi <= 0x7fffffff) {
 				if(x_hi <= 0x3ff8) {
 					if(x_hi <= 0x0f) {
-						return kb.append([
+						return this.append([
 							0x80 | (x_hi << 3) | (x_lo >> 28),
 							0x80 | ((x_lo >> 21) & 0x7f),
 							0x80 | ((x_lo >> 14) & 0x7f),
@@ -305,7 +304,7 @@ class buffer_encoder {
 						]);
 					}
 					else {
-						return kb.append([
+						return this.append([
 							0x80 | (x_hi & 0x7f),
 							0x80 | ((x_hi << 3) & 0x7f) | (x_lo >> 28),
 							0x80 | ((x_lo >> 21) & 0x7f),
@@ -318,66 +317,116 @@ class buffer_encoder {
 			}
 		}
 
-		throw new Error('encoding integer of 6 bytes or more not supported');
+		throw new Error(`encoding integer of 6 bytes or more not supported by '.vuint()'; try using '.vbigint()' insteead`);
 	}
 
-	close() {
-		return this.buffer.close();
+	vbigint(xn_value) {
+		// fast encoding
+		if(xn_value <= 0x7fffffffn) {
+			if(xn_value <= 0x3fffn) {
+				if(xn_value <= 0x7fn) {
+					return this.append_byte(Number(xn_value));
+				}
+				else {
+					return this.append_bytes_2(
+						Number(0x80n | (xn_value & 0x7fn)),
+						Number(xn_value >> 7n)
+					);
+				}
+			}
+			else if(xn_value <= 0x1fffffn) {
+				return this.append_bytes_3(
+					Number(0x80n | (xn_value & 0x7fn)),
+					Number(0x80n | ((xn_value >> 7n) & 0x7fn)),
+					Number(xn_value >> 14n)
+				);
+			}
+			else if(xn_value <= 0xfffffffn) {
+				return this.append_bytes_4(
+					Number(0x80n | (xn_value & 0x7fn)),
+					Number(0x80n | ((xn_value >> 7n) & 0x7fn)),
+					Number(0x80n | ((xn_value >> 14n) & 0x7fn)),
+					Number(xn_value >> 21n)
+				);
+			}
+			else {
+				return this.append([
+					Number(0x80n | (xn_value & 0x7fn)),
+					Number(0x80n | ((xn_value >> 7n) & 0x7fn)),
+					Number(0x80n | ((xn_value >> 14n) & 0x7fn)),
+					Number(0x80n | ((xn_value >> 21n) & 0x7fn)),
+					Number(xn_value >> 28n),
+				]);
+			}
+		}
+		// use a loop
+		else {
+			let ib_write;
+
+			do {
+				ib_write = this.append_byte(Number(0x80n | (xn_value & 0x7fn)));
+				xn_value >>= 7n;
+			} while(xn_value >= 0x7fn);
+
+			return ib_write;
+		}
 	}
 }
 
-class word_writer {
+
+class WordWriter {
 	constructor(h_config={}) {
 		Object.assign(this, {
-			buffer: new buffer_writer(h_config),
-			indices: [],
-			count: 0,
+			_kb: new BufferEncoder(h_config),
+			_a_indices: [],
+			_c_items: 0,
 		});
 	}
 
 	append(at_item) {
-		this.indices.push(this.buffer.append(at_item));
-		this.count += 1;
+		this._a_indices.push(this._kb.append(at_item));
+		this._c_items += 1;
 	}
 
 	close() {
 		return {
-			contents: this.buffer.close(),
-			indices: this.indices,
+			contents: this._kb.close(),
+			indices: this._a_indices,
 		};
 	}
 }
 
 
-class bitsequence_writer {
+class BitsequenceWriter {
 	constructor(n_bits) {
 		Object.assign(this, {
-			contents: new Uint8Array(Math.ceil(n_bits / 8)),
-			index: 0,
-			pending: 0x00,
-			bit: -1,
+			_at_contents: new Uint8Array(Math.ceil(n_bits / 8)),
+			_ib_index: 0,
+			_xb_pending: 0x00,
+			_i_bit: -1,
+			_n_bits: n_bits,
 		});
 	}
 
 	advance(n_bits) {
-		let i_bit = n_bits + this.bit;
-		let n_bytes = (i_bit / 8) | 0;
-		if(n_bytes) {
-			if(this.pending) {
-				this.contents[this.index] = this.pending;
-				this.pending = 0;
+		let i_bit = n_bits + this._i_bit;
+		let nb_move = i_bit >> 3;
+		if(nb_move) {
+			if(this._xb_pending) {
+				this._at_contents[this._ib_index] = this._xb_pending;
+				this._xb_pending = 0;
 			}
-			this.index += n_bytes;
+			this._ib_index += nb_move;
 		}
 
-		let i_pos = this.bit = i_bit % 8;
-		this.pending |= 0x80 >>> i_pos;
+		let i_pos = this._i_bit = i_bit % 8;
+		this._xb_pending |= 0x80 >>> i_pos;
 	}
 
 	close() {
-		let at_contents = this.contents;
-		if(this.index > at_contents.length) throw new Error('bitsequence wrote out of range');
-		at_contents[this.index] = this.pending;
+		let at_contents = this._at_contents;
+		if(this._ib_index > at_contents.length) throw new Error('bitsequence wrote out of range');
+		at_contents[this._ib_index] = this._xb_pending;
 		return at_contents;
 	}
 }
@@ -425,24 +474,24 @@ const load_popcounts = () => {
 	]).buffer);
 };
 
-class bitsequence_reader {
+class BitsequenceReader {
 	constructor(at_sequence) {
 		let ab_contents = ArrayBuffer.isView(at_sequence)? at_sequence.buffer: at_sequence;
 		if(!ATU8_POPCOUNTS_16) load_popcounts();
 
 		Object.assign(this, {
-			contents: ab_contents,
-			view_u8: new Uint8Array(ab_contents),
-			view_u16: new Uint16Array(ab_contents),
-			view_u32: new Uint32Array(ab_contents),
-			read: 0,
+			_ab_contents: ab_contents,
+			_atu8_view_u8: new Uint8Array(ab_contents),
+			_atu16_view_u16: new Uint16Array(ab_contents),
+			_atu32_view_u32: new Uint32Array(ab_contents),
+			_ib_read: 0,
 		});
 	}
 
 	select_1(i_item) {
 		let {
-			view_u8: atu8_view,
-			view_u16: atu16_view,
+			_atu8_view_u8: atu8_view,
+			_atu16_view_u16: atu16_view,
 		} = this;
 
 		let c_pop = 0;
@@ -471,8 +520,8 @@ class bitsequence_reader {
 
 	rank_1(ii_target) {
 		let {
-			view_u8: atu8_view,
-			view_u16: atu16_view,
+			_atu8_view_u8: atu8_view,
+			_atu16_view_u16: atu16_view,
 		} = this;
 
 		let c_pop = 0;
@@ -496,130 +545,287 @@ class bitsequence_reader {
 }
 
 
+function BufferDecoder$decode_vuint(k_self) {
+	let {
+		_at_contents: at,
+		_ib_read: ib,
+	} = k_self;
 
-class buffer_decoder {
+	// 1 byte value
+	let x = at[ib];
+
+	// first byte is end of int
+	if(x < 0x80) {
+		k_self._ib_read += 1;
+		return x;
+	}
+
+	// set vuint value to lower value
+	let x_value = x & 0x7f;
+
+
+	// 2 bytes; keep going
+	x = at[ib+1];
+
+	// last byte of number
+	if(x < 0x80) {
+		k_self._ib_read += 2;
+		return x_value | (x << 7);
+	}
+
+	// add lower value
+	x_value |= (x & 0x7f) << 7;
+
+
+	// 3 bytes; keep going
+	x = at[ib+2];
+
+	// last byte of number
+	if(x < 0x80) {
+		k_self._ib_read += 3;
+		return x_value | (x << 14);
+	}
+
+	// add lower value
+	x_value |= (x & 0x7f) << 14;
+
+
+	// 4 bytes; keep going
+	x = at[ib+3];
+
+	// last byte of number
+	if(x < 0x80) {
+		k_self._ib_read += 4;
+		return x_value | (x << 21);
+	}
+
+	// add lower value
+	x_value |= (x & 0x7f) << 21;
+
+
+	// 5 bytes; be cautious
+	x = at[ib+4];
+
+	// safe to shift
+	let x_hi = (x & 0x7f);
+	if(x_hi < 0x07) {
+		// add lower value
+		x_value |= x_hi << 28;
+	}
+	// cannot shift
+	else {
+		// shift by means of float multiplication
+		x_value += (x_hi * 0x10000000);
+	}
+
+	// last byte of number
+	if(x < 0x80) {
+		k_self._ib_read += 5;
+		return x_value;
+	}
+
+
+
+	// // 6 bytes (or more)
+	// throw new Error(`decoding integers of 6 bytes or more not supported by '.vuint()'; try using '.vbigint()' instead`);
+}
+
+
+
+function BufferDecoder$decode_vbigint(k_self, xb_limit=36) {
+	let {
+		_at_contents: at,
+		_ib_read: ib,
+	} = k_self;
+
+	// 1 byte value
+	let x = at[ib];
+
+	// first byte is end of int
+	if(x < 0x80) {
+		k_self._ib_read += 1;
+		return BigInt(x);
+	}
+
+	// set pint value to lower value
+	let x_value = x & 0x7f;
+
+
+	// 2 bytes; keep going
+	x = at[ib+1];
+
+	// add lower value
+	x_value |= (x & 0x7f) << 7;
+
+	// last byte of number
+	if(x < 0x80) {
+		k_self._ib_read += 2;
+		return BigInt(x_value);
+	}
+
+
+	// 3 bytes; keep going
+	x = at[ib+2];
+
+	// add lower value
+	x_value |= (x & 0x7f) << 14;
+
+	// last byte of number
+	if(x < 0x80) {
+		k_self._ib_read += 3;
+		return BigInt(x_value);
+	}
+
+
+	// 4 bytes; keep going
+	x = at[ib+3];
+
+	// add lower value
+	x_value |= (x & 0x7f) << 21;
+
+	// last byte of number
+	if(x < 0x80) {
+		k_self._ib_read += 4;
+		return BigInt(x_value);
+	}
+
+
+	// continue with BigInt
+	let xn_value = BigInt(x_value);
+
+
+	// 5 bytes; keep going
+	x = at[ib+4];
+
+	// add lower value
+	xn_value |= (BigInt(x) & 0x7fn) << 28n;
+
+	// last byte of number
+	if(x < 0x80) {
+		k_self._ib_read += 5;
+		return xn_value;
+	}
+
+
+	// 6 bytes; keep going
+	x = at[ib+5];
+
+	// add lower value
+	xn_value |= (BigInt(x) & 0x7fn) << 35n;
+
+	// last byte of number
+	if(x < 0x80) {
+		k_self._ib_read += 6;
+		return xn_value;
+	}
+
+
+	// 7 bytes; keep going
+	x = at[ib+6];
+
+	// add lower value
+	xn_value |= (BigInt(x) & 0x7fn) << 42n;
+
+	// last byte of number
+	if(x < 0x80) {
+		k_self._ib_read += 7;
+		return xn_value;
+	}
+
+
+	// 8 bytes; keep going
+	x = at[ib+7];
+
+	// add lower value
+	xn_value |= (BigInt(x) & 0x7fn) << 49n;
+
+	// last byte of number
+	if(x < 0x80) {
+		k_self._ib_read += 8;
+		return xn_value;
+	}
+
+
+	// 9 bytes
+	ib += 8;
+
+	// use loop
+	for(let c_bytes=8, xn_shift=56n; c_bytes<=xb_limit; xn_shift+=7n, c_bytes++) {
+		x = at[ib++];
+
+		// add lower value
+		xn_value |= (BigInt(x) & 0x7fn) << xn_shift;
+
+		// last byte of number
+		if(x < 0x80) {
+			k_self._ib_read += c_bytes;
+			return xn_value;
+		}
+	}
+
+	throw new Error(`reached max bytes limit while decoding vbigint`);
+}
+
+
+class BufferDecoder {
 	constructor(at_contents) {
 		Object.assign(this, {
-			contents: at_contents,
-			read: 0,
-			referenced: false,
+			_at_contents: at_contents,
+			_ib_read: 0,
+			_b_referenced: false,
 		});
 	}
 
+	seek(ib_seek) {
+		this._ib_read = ib_seek;
+	}
+
+	skip(nb_skip) {
+		this._ib_read += nb_skip;
+	}
+
+	peek_byte() {
+		return this._at_contents[this._ib_read];
+	}
+
 	byte() {
-		return this.contents[this.read++];
+		return this._at_contents[this._ib_read++];
 	}
 
 	vuint() {
-		let {
-			contents: at,
-			read: i,
-		} = this;
+		return BufferDecoder$decode_vuint(this);
+	}
 
-		// 1 byte value
-		let x = at[i];
-
-		// first byte is end of int
-		if(x < 0x80) {
-			this.read += 1;
-			return x;
-		}
-
-		// set pint value to lower value
-		let x_value = x & 0x7f;
-
-
-		// 2 bytes; keep going
-		x = at[i+1];
-
-		// add lower value
-		x_value |= (x & 0x7f) << 7;
-
-		// last byte of number
-		if(x < 0x80) {
-			this.read += 2;
-			return x_value;
-		}
-
-
-		// 3 bytes; keep going
-		x = at[i+2];
-
-		// add lower value
-		x_value |= (x & 0x7f) << 14;
-
-		// last byte of number
-		if(x < 0x80) {
-			this.read += 3;
-			return x_value;
-		}
-
-
-		// 4 bytes; keep going
-		x = at[i+3];
-
-		// add lower value
-		x_value |= (x & 0x7f) << 21;
-
-		// last byte of number
-		if(x < 0x80) {
-			this.read += 4;
-			return x_value;
-		}
-
-
-		// 5 bytes; be cautious
-		x = at[i+4];
-
-		// safe to shift
-		let x_hi = (x & 0x7f);
-		if(x_hi < 0x07) {
-			// add lower value
-			x_value |= x_hi << 28;
-		}
-		// cannot shift
-		else {
-			// shift by means of float multiplication
-			x_value += (x_hi * 0x10000000);
-		}
-
-		// last byte of number
-		if(x < 0x80) {
-			this.read += 5;
-			return x_value;
-		}
-
-
-		// 6 bytes (or more)
-		throw new Error('decoding integers of 6 bytes or more not supported');
+	vbigint() {
+		return BufferDecoder$decode_vbigint(this);
 	}
 
 	ntu8_string() {
 		let {
-			contents: at_contents,
-			read: i_read,
+			_at_contents: at_contents,
+			_ib_read: ib_read,
 		} = this;
 
-		let i_end = at_contents.indexOf(0, i_read);
-		if(-1 === i_end) throw new RangeError('buffer decoder found no null-terminated utf8-encoded string');
+		let ib_end = at_contents.indexOf(0, ib_read);
+		if(-1 === ib_end) throw new RangeError('buffer decoder found no null-terminated utf8-encoded string');
 
-		let s_ntu8 = D_TEXT_DECODER.decode(at_contents.subarray(i_read, i_end));
-		this.read = i_end + 1;
+		let s_ntu8 = D_TEXT_DECODER.decode(at_contents.subarray(ib_read, ib_end));
+		this._ib_read = ib_end + 1;
 		return s_ntu8;
 	}
 
 	// extract typed array and intelligently conserve memory when mem-aligning
 	typed_array() {
-		let at_contents = this.contents;
+		let at_contents = this._at_contents;
 
 		// type of array
-		let x_type = at_contents[this.read++];
+		let x_type = at_contents[this._ib_read++];
 
 		// number of elements in array
 		let nl_values = this.vuint();
 
 		// offet of typed array's start
-		let ib_offset = at_contents.byteOffset + this.read;
+		let ib_offset = at_contents.byteOffset + this._ib_read;
 
 		// typed array class
 		let dc_typed_array = H_ENCODING_TO_TYPED_ARRAY[x_type];
@@ -630,7 +836,7 @@ class buffer_decoder {
 		// not mem-aligned!
 		if(ib_offset % dc_typed_array.BYTES_PER_ELEMENT) {
 			// contents are referenced
-			if(this.referenced) {
+			if(this._b_referenced) {
 				throw new Error(`cannot safely extract typed array into new allocated memory segment since older array buffer is still referenced by previous call to 'buffer_decoder#sub'`);
 			}
 
@@ -644,10 +850,10 @@ class buffer_decoder {
 			at8_contents.set(at_contents.subarray(ib_offset));
 
 			// discard ref to previous memory segment
-			this.contents = at8_contents;
+			this._b_contents = at8_contents;
 
 			// reset read head
-			this.read = 0;
+			this._ib_read = 0;
 
 			// create typed array instance
 			at_values = new dc_typed_array(ab_contents, 0, nl_values);
@@ -658,23 +864,23 @@ class buffer_decoder {
 		}
 
 		// increment read offset
-		this.read += at_values.byteLength;
+		this._ib_read += at_values.byteLength;
 
 		return at_values;
 	}
 
 	// extract typed array and possibly waste tons of memory
 	typed_array_grow() {
-		let at_contents = this.contents;
+		let at_contents = this._at_contents;
 
 		// type of array
-		let x_type = at_contents[this.read++];
+		let x_type = at_contents[this._ib_read++];
 
 		// number of elements in array
 		let nl_values = this.vuint();
 
 		// offet of typed array's start
-		let ib_offset = at_contents.byteOffset + this.read;
+		let ib_offset = at_contents.byteOffset + this._ib_read;
 
 		// typed array class
 		let dc_typed_array = H_ENCODING_TO_TYPED_ARRAY[x_type];
@@ -696,20 +902,26 @@ class buffer_decoder {
 		}
 
 		// increment read offset
-		this.read += at_values.byteLength;
+		this._ib_read += at_values.byteLength;
 
 		return at_values;
 	}
 
+	/**
+	 * copy contents of the subarray of the given length (remainder if omitted) to new memory.
+	 *   if unreferenced and read to entirety, free the original buffer in the process
+	 * @param  {ByteSize} nb_sub - size of subarray to 'grab'
+	 * @return {[type]}        [description]
+	 */
 	grab(nb_sub=null) {
 		let {
-			contents: at_contents,
-			read: i_read,
+			_at_contents: at_contents,
+			_ib_read: ib_read,
 		} = this;
-		if(null === nb_sub) nb_sub = at_contents.length - i_read;
+		if(null === nb_sub) nb_sub = at_contents.length - ib_read;
 
 		// beyond this grab
-		let i_beyond = i_read + nb_sub;
+		let i_beyond = ib_read + nb_sub;
 
 		// create new buffer for sub
 		let ab_sub = new ArrayBuffer(nb_sub);
@@ -718,17 +930,17 @@ class buffer_decoder {
 		let at_sub = new Uint8Array(ab_sub);
 
 		// copy contents over
-		at_sub.set(at_contents.subarray(i_read, i_read+nb_sub));
+		at_sub.set(at_contents.subarray(ib_read, ib_read+nb_sub));
 
 		// end-of-buffer
 		if(at_contents.length === i_beyond) {
 			// not referenced
-			if(!this.referenced) {
+			if(!this._b_referenced) {
 				// free buffer
-				this.contents = new Uint8Array(0);
+				this._at_contents = new Uint8Array(0);
 
 				// update read index
-				this.read = at_contents.length;
+				this._ib_read = at_contents.length;
 
 				// return new contents
 				return at_sub;
@@ -745,43 +957,52 @@ class buffer_decoder {
 		at8_contents.set(at_contents.subarray(i_beyond));
 
 		// update buffer
-		this.contents = at8_contents;
+		this._at_contents = at8_contents;
 
 		// update read index
-		this.read = 0;
+		this._ib_read = 0;
 
 		// return new contents
 		return at_sub;
 	}
 
+	/**
+	 * create a view on the next region and advance the read pointer.
+	 *   NOTE: consider using '.grab()' if you intend to hold onto the select memory
+	 *   region long after the underlying buffer is no longer needed. if you use this
+	 *   method to store some data, the GC will not be able to collect the underlying
+	 *   buffer's memory region until all pointers are freed.
+	 * @param  {[type]} nb_sub [description]
+	 * @return {[type]}        [description]
+	 */
 	sub(nb_sub=null) {
 		let {
-			contents: at_contents,
-			read: i_read,
+			_at_contents: at_contents,
+			_ib_read: ib_read,
 		} = this;
-		if(null === nb_sub) nb_sub = at_contents.length - i_read;
-		this.read += nb_sub;
+		if(null === nb_sub) nb_sub = at_contents.length - ib_read;
+		this._ib_read += nb_sub;
 
 		// record that the underlying buffer is still referenced
-		this.referenced = true;
+		this._b_referenced = true;
 
-		return at_contents.subarray(i_read, i_read+nb_sub);
+		return at_contents.subarray(ib_read, ib_read+nb_sub);
 	}
 }
 
 
-class word_reader {
+class WordReader {
 	constructor(at_contents, at_indices) {
 		Object.assign(this, {
-			contents: at_contents,
-			indices: at_indices,
+			_at_contents: at_contents,
+			_at_indices: at_indices,
 		});
 	}
 
 	* words() {
 		let {
-			contents: at_contents,
-			indices: at_indices,
+			_at_contents: at_contents,
+			_at_indices: at_indices,
 		} = this;
 
 		let n_words = at_indices.length;
@@ -795,8 +1016,8 @@ class word_reader {
 
 	* triples() {
 		let {
-			contents: at_contents,
-			indices: at_indices,
+			_at_contents: at_contents,
+			_at_indices: at_indices,
 		} = this;
 
 		let n_words = at_indices.length;
@@ -823,23 +1044,52 @@ class word_reader {
 }
 
 module.exports = Object.assign({
-	uint_array,
-	new_uint_array,
+	fitUintArray: uint_array,
+	newUintArray: (n_range, n_size) => new (uint_array(n_range))(n_size),
 
-	buffer_writer,
-	word_writer,
+	encodeUtf8: s_chunk => D_TEXT_ENCODER.encode(s_chunk),
+	encodeUtf16(s_chunk) {
+		// encode chunk as utf-16le
+		let ab_chunk = Buffer.from(s_chunk, 'utf-16le');
 
-	bitsequence_writer,
-	bitsequence_reader,
+		// prefix buffer w/ utf-16 token
+		return Buffer.concat([AT_UTF_16_TOKEN, ab_chunk], ab_chunk.length + 1);
+	},
 
-	word_reader,
+	decodeUtf8: at_chunk => D_TEXT_DECODER.decode(at_chunk),
 
-	buffer_encoder,
+	decodeVuint(at_contents, ib_read=0) {
+		let gc_decode = {
+			_at_contents: at_contents,
+			_ib_read: ib_read,
+		};
 
-	buffer_decoder,
+		let x_value = BufferDecoder$decode_vuint(gc_decode);
 
-	encode_utf_8,
-	encode_utf_16,
+		return [x_value, gc_decode._ib_read];
+	},
 
-	decode_utf_8,
+	decodeVbigint(at_contents, ib_read=0) {
+		let gc_decode = {
+			_at_contents: at_contents,
+			_ib_read: ib_read,
+		};
+
+		let x_value = BufferDecoder$decode_vbigint(gc_decode);
+
+		return [x_value, gc_decode._ib_read];
+	},
+
+	WordWriter,
+	WordReader,
+
+	BitsequenceWriter,
+	BitsequenceReader,
+
+	BufferEncoder,
+	BufferDecoder,
+
+	constants: {
+		H_ENCODING_TO_TYPED_ARRAY,
+	},
 });

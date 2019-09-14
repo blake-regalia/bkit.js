@@ -10,8 +10,8 @@ module.exports = {
 				deps: 'src/main/module.js.jmacs',
 
 				run: /* syntax: bash */ `
-					jmacs $1 > $@
-					eslint --fix --color $@
+					npx jmacs $1 > $@
+					npx eslint --fix --color $@
 				`,
 			}),
 		},

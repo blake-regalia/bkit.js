@@ -1,14 +1,14 @@
 ---
   parserOptions:
-    ecmaVersion: 9
     sourceType: module
   env:
-    es6: true
+    es2020: true
     browser: true
     node: true
-    commonjs: true
+    # commonjs: true
   extends:
     - 'eslint:recommended'
+    - 'plugin:jmacs/all'
     # - 'plugin:elite/all'
   rules:
 
@@ -127,7 +127,7 @@
     no-buffer-constructor: error
     no-new-require: error
     no-path-concat: error
-    
+
     # "Stylistic Issues"
     array-bracket-spacing:
       - error
@@ -198,7 +198,7 @@
     new-cap:
       - error
       - newIsCap: false
-        capIsNew: true
+        capIsNew: false
         properties: false
     new-parens: error
     newline-per-chained-call:
@@ -221,7 +221,7 @@
       - warn
       - defaultAssignment: false
     no-whitespace-before-property: error
-    nonblock-statement-body-position: 
+    nonblock-statement-body-position:
       - error
       - beside
     object-curly-newline:
@@ -303,7 +303,7 @@
       - allowNamedFunctions: true
     prefer-spread: warn
     # prefer-template: warn
-    rest-spread-spacing: 
+    rest-spread-spacing:
       - warn
       - never
     symbol-description: warn
@@ -313,7 +313,7 @@
     no-fallthrough: warn
 
     # Custom Rules
-    
+
 
 # unspecified:
   # padding-line-between-statements
