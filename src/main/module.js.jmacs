@@ -776,6 +776,10 @@ class BufferDecoder {
 		});
 	}
 
+	get read() {
+		return this._ib_read;
+	}
+
 	seek(ib_seek) {
 		this._ib_read = ib_seek;
 	}
@@ -1078,6 +1082,31 @@ module.exports = Object.assign({
 		let x_value = BufferDecoder$decode_vbigint(gc_decode);
 
 		return [x_value, gc_decode._ib_read];
+	},
+
+	readUintLE(at_contents, ib_read, nb_read) {
+		let x_value = 0;
+
+		// number of shifts for byte section
+		let cs_le = 0;
+
+		// each byte
+		for(let ib_max=ib_read+nb_read; ib_read<ib_max; ib_read++, cs_le+=8) {
+			// shift byte into place, then OR-assign value
+			x_value |= (at_contents[ib_read] << cs_le);
+		}
+
+		return x_value;
+	},
+
+	concat2(at_a, at_b) {
+		let nb_a = at_a.length;
+		let at_out = new Uint8Array(nb_a+at_b.length);
+
+		at_out.set(at_a);
+		at_out.set(at_b, nb_a);
+
+		return at_out;
 	},
 
 	WordWriter,
