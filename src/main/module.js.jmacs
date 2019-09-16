@@ -1099,6 +1099,21 @@ module.exports = Object.assign({
 		return x_value;
 	},
 
+	writeUintLE(at_contents, ib_write, nb_write, x_value) {
+		at_contents[ib_write] = x_value & 0xff;
+
+		// number of shifts for byte section
+		let cs_le = 0;
+
+		// each byte
+		for(let ib_max=ib_write+nb_write; ib_write<ib_max; ib_write++, cs_le+=8) {
+			// shift byte into place
+			at_contents[ib_write] = (x_value >> cs_le) & 0xff;
+		}
+
+		return at_contents;
+	},
+
 	concat2(at_a, at_b) {
 		let nb_a = at_a.length;
 		let at_out = new Uint8Array(nb_a+at_b.length);
