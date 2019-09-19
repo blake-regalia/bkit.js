@@ -7,7 +7,7 @@
     "email": "blake.regalia@gmail.com"
   },
   "files": "build",
-  "main": "build/main.js",
+  "main": "build/main/module.js",
   "keywords": [
     "buffer",
     "binary",
@@ -15,9 +15,10 @@
   ],
   "repository": "blake-regalia/bkit.js.git",
   "scripts": {
-    "build": "mkdir -p build && jmacs src/main/module.js.jmacs > build/main.js"
+    "build": "npx emk"
   },
   "devDependencies": {
+    "detective": "^5.2.0",
     "emk": "^1.7.2",
     "eslint": "^6.4.0",
     "eslint-plugin-jmacs": "^1.4.0",

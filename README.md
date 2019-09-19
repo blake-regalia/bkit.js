@@ -1,7 +1,7 @@
 # bkit.js 🐝
 [![NPM version][npm-image]][npm-url] [![Dependency Status][daviddm-image]][daviddm-url] 
 
-A utility kit for encoding and decoding binary data.
+A utility kit for encoding and decoding binary data using `Uint8Array`s in both node.js and the browser.
 
 ## License
 
