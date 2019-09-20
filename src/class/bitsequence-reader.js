@@ -1,6 +1,6 @@
 const {
 	popcount_uint32,
-} = require('../main/local.js');
+} = require('../main/locals.js');
 
 module.exports = class BitsequenceReader {
 	constructor(at_sequence, f_popcount=popcount_uint32) {
