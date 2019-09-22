@@ -209,7 +209,7 @@ module.exports = class BufferEncoder {
 	append6(xb_a, xb_b, xb_c, xb_d, xb_e, xb_f) {
 		let at_contents = this._at_contents;
 		let ib_write = this._ib_write;
-		if(ib_write < at_contents.length - 4) {
+		if(ib_write < at_contents.length - 5) {
 			at_contents[ib_write] = xb_a;
 			at_contents[ib_write+1] = xb_b;
 			at_contents[ib_write+2] = xb_c;
@@ -258,6 +258,22 @@ module.exports = class BufferEncoder {
 	 */
 	ntu8String(s_value) {
 		return this.append(D_TEXT_ENCODER.encode(s_value+'\0'));
+	}
+
+	/**
+	 * Encode a length-prefixed UTF8-encoded string to the buffer
+	 * @param  {string} s_value - the string to encode
+	 * @return {BytePosition} the updated write position
+	 */
+	lpu8String(s_value) {
+		// encode string
+		let at_value = D_TEXT_ENCODER.encode(s_value);
+
+		// length prefix
+		this.vuint(at_value.length);
+
+		// write string data and return write position
+		return this.append(at_value);
 	}
 
 	/**
@@ -314,7 +330,7 @@ module.exports = class BufferEncoder {
 	 * @return {BytePosition} the updated write position
 	 */
 	typedArray(at_values) {
-		this.meta_typed_array(at_values);
+		this.metaTypedArray(at_values);
 
 		// not uint8 array
 		let at_append = new Uint8Array(at_values.buffer, at_values.byteOffset, at_values.byteLength);

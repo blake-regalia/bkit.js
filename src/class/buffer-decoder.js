@@ -246,7 +246,7 @@ class BufferDecoder {
 		this._ib_read += nb_skip;
 	}
 
-	peek_byte() {
+	peek() {
 		return this._at_contents[this._ib_read];
 	}
 
@@ -262,7 +262,7 @@ class BufferDecoder {
 		return BufferDecoder$decode_vbigint(this);
 	}
 
-	ntu8_string() {
+	ntu8String() {
 		let {
 			_at_contents: at_contents,
 			_ib_read: ib_read,
@@ -276,8 +276,22 @@ class BufferDecoder {
 		return s_ntu8;
 	}
 
+	lpu8String() {
+		let {
+			_at_contents: at_contents,
+			_ib_read: ib_read,
+		} = this;
+
+		let nb_string = BufferDecoder$decode_vuint(this);
+
+		let ib_end = ib_read + nb_string;
+		let s_lpu8 = D_TEXT_DECODER.decode(at_contents.subarray(ib_read, ib_end));
+		this._ib_read = ib_end;
+		return s_lpu8;
+	}
+
 	// extract typed array and intelligently conserve memory when mem-aligning
-	typed_array() {
+	typedArray() {
 		let at_contents = this._at_contents;
 
 		// type of array
