@@ -11,14 +11,33 @@ const {
 	X_ENCODING_TYPED_ARRAY_FLOAT64,
 	X_ENCODING_TYPED_ARRAY_BIGINT64,
 	X_ENCODING_TYPED_ARRAY_BIGUINT64,
+	H_FAST_READS_BE,
+	H_FAST_READS_LE,
+	H_FAST_WRITES_BE,
+	H_FAST_WRITES_LE,
 } = require('../main/locals.js');
 
 const NB_DEFAULT_ALLOCATION = 64 * 1024;  // 64 KiB
 
+function BufferEncoder$grow(k_self) {
+	let at_contents = k_self._at_contents;
+
+	// alloc new buffer and copy contents
+	let nb_alloc = at_contents.length + k_self._nb_grow;
+	let at_alloc = new Uint8Array(nb_alloc);
+
+	// copy contents over to new alloc region
+	at_alloc.set(at_contents);
+
+	// save field and return
+	return k_self._at_contents = at_alloc;
+}
+
+
 /**
  * Encode proprietary datatypes into a buffer.
  */
-module.exports = class BufferEncoder {
+class BufferEncoder {
 	constructor(h_config={}) {
 		let {
 			malloc: b_force_malloc=false,
@@ -249,6 +268,40 @@ module.exports = class BufferEncoder {
 		// copy item
 		at_contents.set(at_item, ib_write);
 		return this._ib_write = ib_end;
+	}
+
+	writerUintLE(nb_write) {
+		let f_writer = H_FAST_WRITES_LE[nb_write];
+
+		switch(nb_write) {
+			case 1: return this.append1.bind(this);
+
+			@*{
+				for(let nb_write=2; nb_write<=6; nb_write++) {
+					yield /* syntax: js */ `
+						case ${nb_write}: return (x_value) => {
+							let ib_write = this._ib_write;
+							let at_contents = this._at_contents;
+
+							// write exceeds current buffer; grow
+							if(ib_write < at_contents.length - ${nb_write}) {
+								at_contents = BufferEncoder$grow(this);
+							}
+
+							// write uintLE to contents
+							f_writer(at_contents, ib_write, x_value);
+
+							// advance write position
+							this._ib_write += ${nb_write};
+						};
+					`;
+				}
+			}
+
+			default: {
+				throw new Error(`cannot write given width: ${nb_write}`);
+			}
+		}
 	}
 
 	/**
@@ -486,4 +539,10 @@ module.exports = class BufferEncoder {
 			return ib_write;
 		}
 	}
-};
+}
+
+// byte() alias
+BufferEncoder.prototype.byte = BufferEncoder.prototype.append1;
+
+module.exports = BufferEncoder;
+

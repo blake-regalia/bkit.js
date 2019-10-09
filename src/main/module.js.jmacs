@@ -3,7 +3,13 @@ const {
 	D_TEXT_ENCODER,
 	D_TEXT_DECODER,
 	AT_UTF_16_TOKEN,
+	popcount_uint16,
 	popcount_uint32,
+	select1_uint32,
+	H_FAST_READS_BE,
+	H_FAST_READS_LE,
+	H_FAST_WRITES_BE,
+	H_FAST_WRITES_LE,
 } = locals;
 
 const BufferEncoder = require('../class/buffer-encoder.js');
@@ -31,105 +37,280 @@ function uint_array(n_range) {
 };
 
 
-const F_READ_0 = () => 0;
-const F_READ_1 = (at, ib) => at[ib];
-const F_WRITE_0 = (at, ib) => {
-	at[ib] = 0;
-	return at;
-};
-const F_WRITE_1 = (at, ib, x) => {
-	at[ib] = x & 0xff;
-	return at;
-};
-
-@.{
-	function* mk_fast(s_what, b_le, f_each, f_out) {
-		// shared functions
-		yield /* syntax: js */ `
-			// 0 bytes
-			F_${s_what.toUpperCase()}_0,
-
-			// 1 byte
-			F_${s_what.toUpperCase()}_1,
-		`
-
-		let sj_op_shift = 'read' === s_what? '<<': '>>>';
-		let sj_op_mul = 'read' === s_what? '*': '/';
-
-		// each byte width
-		for(let nb=2; nb<8; nb++) {
-			// build operations table
-			let a_ops = [];
-			let ib_start = b_le? 0: nb-1;
-			let n_change = b_le? +1: -1;
-			let ib_stop = b_le? nb: -1;
-			for(let ib=ib_start, ns=0; ib!==ib_stop; ib+=n_change, ns+=8) {
-				// access typed array element
-				let sj_access = /* syntax: js */ `at[ib${ib? `+${ib}`: ''}]`;
-
-				// bit shift value
-				let sj_shift = '';
-				if(ns > 24) {
-					sj_shift = /* syntax: js.value */ `${sj_op_mul} 0x1${'0'.repeat(ns * 0.25)}`;
-				}
-				else if(ns) {
-					sj_shift = /* syntax: js.value */ `${sj_op_shift} ${ns}`;
-				}
-
-				// byte component
-				a_ops.push(f_each(sj_access, sj_shift, ns));
-			}
-
-			if(!b_le) a_ops.reverse();
-
-			// OR components together
-			yield /* syntax: js */ `
-				// ${nb} bytes
-				(at, ib${'read' === s_what? '': ', x'}) => ${f_out(a_ops)},
-			`;
-		}
+function build_popcount_cache(ns_size) {
+	let atu8_cache = new Uint8Array(1 << ns_size);
+	for(let x=0; x<(1 << ns_size); x++) {
+		atu8_cache[x] = popcount_uint16(x);
 	}
+	return atu8_cache;
+}
 
-	function* mk_fast_reads(b_le) {
-		yield* mk_fast('read', b_le, (sj_access, sj_shift, ns) => {
-			return ns? /* syntax: js */ `(${sj_access} ${sj_shift})`: sj_access;
-		}, a_ops => a_ops.join(' | '));
+function load_popcount_cache15(k_other) {
+	if(k_other && k_other._atu8_popcount_cache15) {
+		return k_other._atu8_popcount_cache15;
 	}
-
-	function* mk_fast_writes(b_le) {
-		yield* mk_fast('write', b_le, (sj_access, sj_shift, ns) => {
-			// byte component
-			let sj_assign = ns? /* syntax: js */ `(x ${sj_shift})`: 'x';
-
-			return /* syntax: js */ `${sj_access} = ${sj_assign} & 0xff;`;
-		}, a_ops => /* syntax: js */ `{
-			${a_ops.join('\n\t\t')}
-			return at;
-		}`);
+	else if(k_other && k_other._atu8_popcount_cache16) {
+		return k_other._atu8_popcount_cache16.subarray(0, 1 << 15);
+	}
+	else {
+		return build_popcount_cache(15);
 	}
 }
 
+function load_popcount_cache16(k_other) {
+	if(k_other && k_other._atu8_popcount_cache16) {
+		return k_other._atu8_popcount_cache16;
+	}
+	else {
+		return build_popcount_cache(16);
+	}
+}
 
-const H_FAST_READS_BE = [@*{
-	yield* mk_fast_reads(false);
-}];
+function CachedUint32Popcounter_64KiB(k_other) {
+	let atu8_cache16 = load_popcount_cache16(k_other);
 
-const H_FAST_READS_LE = [@*{
-	yield* mk_fast_reads(true);
-}];
+	return {
+		_atu8_popcount_cache16: atu8_cache16,
+		popcountUint32: x => atu8_cache16[x & 0xffff] + atu8_cache16[x >>> 16],
+	};
+};
 
-const H_FAST_WRITES_BE = [@*{
-	yield* mk_fast_writes(false);
-}];
+function CachedUint16Popcounter_32KiB(k_other) {
+	let atu8_cache15 = load_popcount_cache15(k_other);
 
-const H_FAST_WRITES_LE = [@*{
-	yield* mk_fast_writes(true);
-}];
+	return {
+		_atu8_popcount_cache15: atu8_cache15,
+		popcountUint16: x => atu8_cache15[x & 0x7fff] + (x >= 0x8000),
+	};
+};
+
+function CachedUint16Popcounter_64KiB(k_other) {
+	let atu8_cache16 = load_popcount_cache16(k_other);
+
+	return {
+		_atu8_popcount_cache16: atu8_cache16,
+		popcountUint16: x => atu8_cache16[x],
+	};
+};
+
+
+function build_select1s_cache(ns_size) {
+	const atu32_cache = new Uint32Array((1 << ns_size) * 2);
+
+	// there is a better way to do this but it's hard >_<
+	let x_max = 1 << ns_size;
+	for(let x=0; x<x_max; x++) {
+		let xb_set = 0;
+		let xm_mask = 0x1;
+		let x_shift = 0x1;
+		let b_lo = false;
+		let xb_lo = 0;
+
+		for(let ii_scan=0; ii_scan<ns_size; ii_scan++) {
+			if(!b_lo && x_shift >= 0x100000000) {
+				xb_lo = xb_set;
+				xb_set = 0;
+				x_shift = 0x1;
+				b_lo = true;
+			}
+
+			if(x & xm_mask) {
+				xb_set += ii_scan * x_shift;
+				x_shift *= 0x10;
+			}
+
+			xm_mask *= 2;
+		}
+
+		if(b_lo) {
+			atu32_cache[x<<1] = xb_lo;
+			atu32_cache[(x<<1)+1] = xb_set;
+		}
+		else {
+			atu32_cache[x<<1] = xb_set;
+		}
+	}
+
+	return atu32_cache;
+}
+
+function load_select1s_cache15(k_other) {
+	if(k_other && k_other._atu32_select1s_cache15) {
+		return k_other._atu32_select1s_cache15;
+	}
+	else if(k_other && k_other._atu32_select1s_cache16) {
+		return k_other._atu32_select1s_cache16.subarray(0, (1 << 15) * 2);
+	}
+	else {
+		return build_select1s_cache(15);
+	}
+}
+
+function load_select1s_cache16(k_other) {
+	if(k_other && k_other._atu32_select1s_cache16) {
+		return k_other._atu32_select1s_cache16;
+	}
+	else if(k_other && k_other._atu32_select1s_cache15) {
+		throw new Error('refusing to expand cache15 to cache16. try reordering cache reuse.');
+	}
+	else {
+		return build_select1s_cache(16);
+	}
+}
+
+function CachedUint16Selector_256KiB(k_other) {
+	let atu32_cache15 = load_select1s_cache15(k_other);
+	
+	return {
+		_atu32_select1s_cache15: atu32_cache15,
+		select1Uint16: (x, i_1) => {
+			if(x >= 0x8000) {
+				if(!i_1 && (x & 1)) return 0;
+
+				return (atu32_cache15[((x & 0x7fff) << 1) + (i_1 > 7)] >>> (i_1 << 2)) & 0xf || 0xf;
+			}
+			else {
+				return (atu32_cache15[(x << 1) + (i_1 > 7)] >>> (i_1 << 2)) & 0xf;
+			}
+		},
+	};
+}
+
+function CachedUint16Selector_512KiB(k_other) {
+	let atu32_cache16 = load_select1s_cache16(k_other);
+	
+	return {
+		_atu32_select1s_cache16: atu32_cache16,
+		select1Uint16: (x, i_1) => (atu32_cache16[(x << 1) + (i_1 > 7)] >>> (i_1 << 2)) & 0xf,
+	};
+}
+
+
+function CachedUint32Selector_256KiB(k_other, _k_uint16_popcounter) {
+	let atu32_cache15 = load_select1s_cache15(k_other);
+	let k_uint16_popcounter = _k_uint16_popcounter
+		|| (k_other && k_other._k_uint16_popcounter)
+		|| G_DEFAULT_POPCOUNTERS;
+
+	let select1_uint16_cache15 = (x, i_1) => {
+		if(x >= 0x8000) {
+			if(!i_1 && (x & 1)) return 0;
+
+			return (atu32_cache15[((x & 0x7fff) << 1) + (i_1 > 7)] >>> (i_1 << 2)) & 0xf || 0xf;
+		}
+		else {
+			return (atu32_cache15[(x << 1) + (i_1 > 7)] >>> (i_1 << 2)) & 0xf;
+		}
+	};
+
+	return {
+		_k_uint16_popcounter: k_uint16_popcounter,
+		_atu32_select1s_cache15: atu32_cache15,
+		select1Uint32: (xu32, i_1) => {
+			if(xu32 < 0x10000) {
+				return select1_uint16_cache15(xu32, i_1);
+			}
+			else if(!i_1 && (xu32 & 1)) {
+				return 0;
+			}
+			else {
+				let xu16_lo = xu32 & 0xffff;
+
+				let ni_lo = k_uint16_popcounter.popcountUint16(xu16_lo);
+
+				// answer is in lower half
+				if(i_1 < 16 && i_1 < ni_lo) {
+					return select1_uint16_cache15(xu16_lo, i_1);
+				}
+
+				return 16 + select1_uint16_cache15(xu32 >>> 16, i_1 - ni_lo);
+			}
+		}
+	};
+}
+
+
+const G_DEFAULT_POPCOUNTERS = {
+	popcountUint16: popcount_uint16,
+};
+
+function CachedUint32Selector_512KiB(k_other, k_uint16_popcounter=G_DEFAULT_POPCOUNTERS) {
+	let atu32_cache16 = load_select1s_cache16(k_other);
+	
+	return {
+		_atu32_select1s_cache16: atu32_cache16,
+		select1Uint32: (xu32, i_1) => {
+			if(xu32 < 0x10000) {
+				return (atu32_cache16[(xu32 << 1) + (i_1 > 7)] >>> (i_1 << 2)) & 0xf;
+			}
+			else if(!i_1 && (xu32 & 1)) {
+				return 0;
+			}
+			else {
+				let xu16_lo = xu32 & 0xffff;
+
+				// could be in lower half
+				if(i_1 < 16) {
+					let ii_short = (atu32_cache16[(xu16_lo << 1) + (i_1 > 7)] >>> (i_1 << 2)) & 0xf;
+
+					if(ii_short) return ii_short;
+				}
+
+				// number of bits to skip
+				let ni_skip = k_uint16_popcounter.popcountUint16(xu16_lo);
+				let i_rel = i_1 - ni_skip;
+
+				let xu16_hi = xu32 >>> 16;
+				return 16 + ((atu32_cache16[(xu16_hi << 1) + (i_rel > 7)] >>> (i_rel << 2)) & 0xf);
+			}
+		},
+	};
+}
+
 
 
 module.exports = Object.assign({
 	fitUintArray: uint_array,
 	newUintArray: (n_range, n_size) => new (uint_array(n_range))(n_size),
+
+	alignedUintArrayCast(at_from, dc_typed_to, b_trim=false) {
+		// ref byte offset
+		let ib_offset = at_from.byteOffset;
+
+		// ref bytes per element
+		let nb_element = dc_typed_to.BYTES_PER_ELEMENT;
+
+		// byte length of from
+		let nb_from = at_from.byteLength;
+
+		// length after cast
+		let xr_cast = nb_from / nb_element;
+
+		// precompute new typed array length
+		let nl_typed = b_trim? Math.floor(xr_cast): Math.ceil(xr_cast);
+
+		// not mem-aligned or need to grow
+		if((ib_offset % nb_element) || nl_typed > xr_cast) {
+			// allocate new mem-aligned segment
+			let ab_contents = new ArrayBuffer((nl_typed * nb_element) - ib_offset);
+
+			// create byte-view over segment
+			let atu8_contents = new Uint8Array(ab_contents);
+
+			// uint8array view of from
+			let atu8_from = new Uint8Array(at_from.buffer, ib_offset, nb_from);
+
+			// copy contents over
+			atu8_contents.set(atu8_from.subarray(ib_offset));
+
+			// create typed array instance
+			return new dc_typed_to(ab_contents, 0, nl_typed);
+		}
+		else {
+			// create typed array instance
+			return new dc_typed_to(at_from.buffer, ib_offset, nl_typed);
+		}
+	},
 
 	encodeUtf8: s_chunk => D_TEXT_ENCODER.encode(s_chunk),
 	encodeUtf16(s_chunk) {
@@ -227,5 +408,18 @@ module.exports = Object.assign({
 
 	constants: locals,
 
+	popcountUint16: popcount_uint16,
 	popcountUint32: popcount_uint32,
+
+	CachedUint16Popcounter_32KiB,
+	CachedUint16Popcounter_64KiB,
+	CachedUint32Popcounter_64KiB,
+
+	select1Uint16: select1_uint32,
+	select1Uint32: select1_uint32,
+
+	CachedUint16Selector_256KiB,
+	CachedUint16Selector_512KiB,
+
+	CachedUint32Selector_256KiB,
 });
