@@ -5,17 +5,22 @@ const {
 	AT_UTF_16_TOKEN,
 	popcount_uint16,
 	popcount_uint32,
-	select1_uint32,
-	H_FAST_READS_BE,
-	H_FAST_READS_LE,
-	H_FAST_WRITES_BE,
-	H_FAST_WRITES_LE,
+	select1_lo_uint32,
+	H_FAST_READS_INT_BE,
+	H_FAST_READS_INT_LE,
+	H_FAST_WRITES_INT_BE,
+	H_FAST_WRITES_INT_LE,
+	H_FAST_READS_UINT_BE,
+	H_FAST_READS_UINT_LE,
+	H_FAST_WRITES_UINT_BE,
+	H_FAST_WRITES_UINT_LE,
 } = locals;
 
 const BufferEncoder = require('../class/buffer-encoder.js');
 const BufferDecoder = require('../class/buffer-decoder.js');
-const BitsequenceWriter = require('../class/bitsequence-writer.js');
-const BitsequenceReader = require('../class/bitsequence-reader.js');
+const BitsequenceWriterLo = require('../class/bitsequence-writer-lo.js');
+const BitsequenceWriterHi = require('../class/bitsequence-writer-hi.js');
+const BitsequenceReaderHi = require('../class/bitsequence-reader-hi.js');
 
 // creates the smallest uint typed array that satisfies the requisite `range`
 function uint_array(n_range) {
@@ -94,7 +99,7 @@ function CachedUint16Popcounter_64KiB(k_other) {
 };
 
 
-function build_select1s_cache(ns_size) {
+function build_select1s_lo_cache(ns_size) {
 	const atu32_cache = new Uint32Array((1 << ns_size) * 2);
 
 	// there is a better way to do this but it's hard >_<
@@ -134,36 +139,36 @@ function build_select1s_cache(ns_size) {
 	return atu32_cache;
 }
 
-function load_select1s_cache15(k_other) {
-	if(k_other && k_other._atu32_select1s_cache15) {
-		return k_other._atu32_select1s_cache15;
+function load_select1s_lo_cache15(k_other) {
+	if(k_other && k_other._atu32_select1s_lo_cache15) {
+		return k_other._atu32_select1s_lo_cache15;
 	}
-	else if(k_other && k_other._atu32_select1s_cache16) {
-		return k_other._atu32_select1s_cache16.subarray(0, (1 << 15) * 2);
+	else if(k_other && k_other._atu32_select1s_lo_cache16) {
+		return k_other._atu32_select1s_lo_cache16.subarray(0, (1 << 15) * 2);
 	}
 	else {
-		return build_select1s_cache(15);
+		return build_select1s_lo_cache(15);
 	}
 }
 
-function load_select1s_cache16(k_other) {
-	if(k_other && k_other._atu32_select1s_cache16) {
-		return k_other._atu32_select1s_cache16;
+function load_select1s_lo_cache16(k_other) {
+	if(k_other && k_other._atu32_select1s_lo_cache16) {
+		return k_other._atu32_select1s_lo_cache16;
 	}
-	else if(k_other && k_other._atu32_select1s_cache15) {
+	else if(k_other && k_other._atu32_select1s_lo_cache15) {
 		throw new Error('refusing to expand cache15 to cache16. try reordering cache reuse.');
 	}
 	else {
-		return build_select1s_cache(16);
+		return build_select1s_lo_cache(16);
 	}
 }
 
-function CachedUint16Selector_256KiB(k_other) {
-	let atu32_cache15 = load_select1s_cache15(k_other);
+function CachedUint16SelectorLo_256KiB(k_other) {
+	let atu32_cache15 = load_select1s_lo_cache15(k_other);
 	
 	return {
-		_atu32_select1s_cache15: atu32_cache15,
-		select1Uint16: (x, i_1) => {
+		_atu32_select1s_lo_cache15: atu32_cache15,
+		select1LoUint16: (x, i_1) => {
 			if(x >= 0x8000) {
 				if(!i_1 && (x & 1)) return 0;
 
@@ -176,18 +181,18 @@ function CachedUint16Selector_256KiB(k_other) {
 	};
 }
 
-function CachedUint16Selector_512KiB(k_other) {
-	let atu32_cache16 = load_select1s_cache16(k_other);
+function CachedUint16SelectorLo_512KiB(k_other) {
+	let atu32_cache16 = load_select1s_lo_cache16(k_other);
 	
 	return {
-		_atu32_select1s_cache16: atu32_cache16,
-		select1Uint16: (x, i_1) => (atu32_cache16[(x << 1) + (i_1 > 7)] >>> (i_1 << 2)) & 0xf,
+		_atu32_select1s_lo_cache16: atu32_cache16,
+		select1LoUint16: (x, i_1) => (atu32_cache16[(x << 1) + (i_1 > 7)] >>> (i_1 << 2)) & 0xf,
 	};
 }
 
 
-function CachedUint32Selector_256KiB(k_other, _k_uint16_popcounter) {
-	let atu32_cache15 = load_select1s_cache15(k_other);
+function CachedUint32SelectorLo_256KiB(k_other, _k_uint16_popcounter) {
+	let atu32_cache15 = load_select1s_lo_cache15(k_other);
 	let k_uint16_popcounter = _k_uint16_popcounter
 		|| (k_other && k_other._k_uint16_popcounter)
 		|| G_DEFAULT_POPCOUNTERS;
@@ -205,9 +210,53 @@ function CachedUint32Selector_256KiB(k_other, _k_uint16_popcounter) {
 
 	return {
 		_k_uint16_popcounter: k_uint16_popcounter,
-		_atu32_select1s_cache15: atu32_cache15,
-		select1Uint32: (xu32, i_1) => {
+		_atu32_select1s_lo_cache15: atu32_cache15,
+		select1LoUint32: (xu32, i_1) => {
 			if(xu32 < 0x10000) {
+				return select1_uint16_cache15(xu32, i_1);
+			}
+			else if(!i_1 && (xu32 & 1)) {
+				return 0;
+			}
+			else {
+				let xu16_lo = xu32 & 0xffff;
+
+				let ni_lo = k_uint16_popcounter.popcountUint16(xu16_lo);
+
+				// answer is in lower half
+				if(i_1 < 16 && i_1 < ni_lo) {
+					return select1_uint16_cache15(xu16_lo, i_1);
+				}
+
+				return 16 + select1_uint16_cache15(xu32 >>> 16, i_1 - ni_lo);
+			}
+		}
+	};
+}
+
+
+function CachedInt32SelectorLo_256KiB(k_other, _k_uint16_popcounter) {
+	let atu32_cache15 = load_select1s_lo_cache15(k_other);
+	let k_uint16_popcounter = _k_uint16_popcounter
+		|| (k_other && k_other._k_uint16_popcounter)
+		|| G_DEFAULT_POPCOUNTERS;
+
+	let select1_uint16_cache15 = (x, i_1) => {
+		if(x >= 0x8000) {
+			if(!i_1 && (x & 1)) return 0;
+
+			return (atu32_cache15[((x & 0x7fff) << 1) + (i_1 > 7)] >>> (i_1 << 2)) & 0xf || 0xf;
+		}
+		else {
+			return (atu32_cache15[(x << 1) + (i_1 > 7)] >>> (i_1 << 2)) & 0xf;
+		}
+	};
+
+	return {
+		_k_uint16_popcounter: k_uint16_popcounter,
+		_atu32_select1s_lo_cache15: atu32_cache15,
+		select1LoInt32: (xu32, i_1) => {
+			if(xu32 > 0 && xu32 < 0x10000) {
 				return select1_uint16_cache15(xu32, i_1);
 			}
 			else if(!i_1 && (xu32 & 1)) {
@@ -234,12 +283,12 @@ const G_DEFAULT_POPCOUNTERS = {
 	popcountUint16: popcount_uint16,
 };
 
-function CachedUint32Selector_512KiB(k_other, k_uint16_popcounter=G_DEFAULT_POPCOUNTERS) {
-	let atu32_cache16 = load_select1s_cache16(k_other);
+function CachedUint32SelectorLo_512KiB(k_other, k_uint16_popcounter=G_DEFAULT_POPCOUNTERS) {
+	let atu32_cache16 = load_select1s_lo_cache16(k_other);
 	
 	return {
-		_atu32_select1s_cache16: atu32_cache16,
-		select1Uint32: (xu32, i_1) => {
+		_atu32_select1s_lo_cache16: atu32_cache16,
+		select1LoUint32: (xu32, i_1) => {
 			if(xu32 < 0x10000) {
 				return (atu32_cache16[(xu32 << 1) + (i_1 > 7)] >>> (i_1 << 2)) & 0xf;
 			}
@@ -345,38 +394,74 @@ module.exports = Object.assign({
 		return [x_value, gc_decode._ib_read];
 	},
 
+
+	readIntLE(at_contents, ib_read, nb_read) {
+		return H_FAST_READS_INT_LE[nb_read](at_contents, ib_read);
+	},
+
+	readerIntLE(nb_read) {
+		return H_FAST_READS_INT_LE[nb_read];
+	},
+
+	writeIntLE(at_contents, ib_write, nb_write, x_value) {
+		H_FAST_WRITES_INT_LE[nb_write](at_contents, ib_write, x_value);
+		return at_contents;
+	},
+
+	writerIntLE(nb_write) {
+		return H_FAST_WRITES_INT_LE[nb_write];
+	},
+
+	readIntBE(at_contents, ib_read, nb_read) {
+		return H_FAST_READS_INT_BE[nb_read](at_contents, ib_read);
+	},
+
+	readerIntBE(nb_read) {
+		return H_FAST_READS_INT_BE[nb_read];
+	},
+
+	writeIntBE(at_contents, ib_write, nb_write, x_value) {
+		return H_FAST_WRITES_INT_BE[nb_write](at_contents, ib_write, x_value);
+	},
+
+	writerIntBE(nb_write) {
+		return H_FAST_WRITES_INT_BE[nb_write];
+	},
+
+
 	readUintLE(at_contents, ib_read, nb_read) {
-		return H_FAST_READS_LE[nb_read](at_contents, ib_read);
+		return H_FAST_READS_UINT_LE[nb_read](at_contents, ib_read);
 	},
 
 	readerUintLE(nb_read) {
-		return H_FAST_READS_LE[nb_read];
+		return H_FAST_READS_UINT_LE[nb_read];
 	},
 
 	writeUintLE(at_contents, ib_write, nb_write, x_value) {
-		H_FAST_WRITES_LE[nb_write](at_contents, ib_write, x_value);
+		H_FAST_WRITES_UINT_LE[nb_write](at_contents, ib_write, x_value);
 		return at_contents;
 	},
 
 	writerUintLE(nb_write) {
-		return H_FAST_WRITES_LE[nb_write];
+		return H_FAST_WRITES_UINT_LE[nb_write];
 	},
 
 	readUintBE(at_contents, ib_read, nb_read) {
-		return H_FAST_READS_BE[nb_read](at_contents, ib_read);
+		return H_FAST_READS_UINT_BE[nb_read](at_contents, ib_read);
 	},
 
 	readerUintBE(nb_read) {
-		return H_FAST_READS_BE[nb_read];
+		return H_FAST_READS_UINT_BE[nb_read];
 	},
 
 	writeUintBE(at_contents, ib_write, nb_write, x_value) {
-		return H_FAST_WRITES_BE[nb_write](at_contents, ib_write, x_value);
+		return H_FAST_WRITES_UINT_BE[nb_write](at_contents, ib_write, x_value);
 	},
 
 	writerUintBE(nb_write) {
-		return H_FAST_WRITES_BE[nb_write];
+		return H_FAST_WRITES_UINT_BE[nb_write];
 	},
+
 
 	concat2(at_a, at_b) {
 		let nb_a = at_a.length;
@@ -400,8 +485,10 @@ module.exports = Object.assign({
 		return at_out;
 	},
 
-	BitsequenceWriter,
-	BitsequenceReader,
+	BitsequenceWriterLo,
+	BitsequenceWriterHi,
+
+	BitsequenceReaderHi,
 
 	BufferEncoder,
 	BufferDecoder,
@@ -415,11 +502,12 @@ module.exports = Object.assign({
 	CachedUint16Popcounter_64KiB,
 	CachedUint32Popcounter_64KiB,
 
-	select1Uint16: select1_uint32,
-	select1Uint32: select1_uint32,
+	select1LoUint16: select1_lo_uint32,
+	select1LoUint32: select1_lo_uint32,
 
-	CachedUint16Selector_256KiB,
-	CachedUint16Selector_512KiB,
+	CachedUint16SelectorLo_256KiB,
+	CachedUint16SelectorLo_512KiB,
 
-	CachedUint32Selector_256KiB,
+	CachedInt32SelectorLo_256KiB,
+	CachedUint32SelectorLo_256KiB,
 });

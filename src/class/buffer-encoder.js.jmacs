@@ -11,10 +11,14 @@ const {
 	X_ENCODING_TYPED_ARRAY_FLOAT64,
 	X_ENCODING_TYPED_ARRAY_BIGINT64,
 	X_ENCODING_TYPED_ARRAY_BIGUINT64,
-	H_FAST_READS_BE,
-	H_FAST_READS_LE,
-	H_FAST_WRITES_BE,
-	H_FAST_WRITES_LE,
+	H_FAST_READS_INT_BE,
+	H_FAST_READS_INT_LE,
+	H_FAST_WRITES_INT_BE,
+	H_FAST_WRITES_INT_LE,
+	H_FAST_READS_UINT_BE,
+	H_FAST_READS_UINT_LE,
+	H_FAST_WRITES_UINT_BE,
+	H_FAST_WRITES_UINT_LE,
 } = require('../main/locals.js');
 
 const NB_DEFAULT_ALLOCATION = 64 * 1024;  // 64 KiB
@@ -270,8 +274,42 @@ class BufferEncoder {
 		return this._ib_write = ib_end;
 	}
 
+	writerIntLE(nb_write) {
+		let f_writer = H_FAST_WRITES_INT_LE[nb_write];
+
+		switch(nb_write) {
+			case 1: return this.append1.bind(this);
+
+			@*{
+				for(let nb_write=2; nb_write<=6; nb_write++) {
+					yield /* syntax: js */ `
+						case ${nb_write}: return (x_value) => {
+							let ib_write = this._ib_write;
+							let at_contents = this._at_contents;
+
+							// write exceeds current buffer; grow
+							if(ib_write < at_contents.length - ${nb_write}) {
+								at_contents = BufferEncoder$grow(this);
+							}
+
+							// write intLE to contents
+							f_writer(at_contents, ib_write, x_value);
+
+							// advance write position
+							this._ib_write += ${nb_write};
+						};
+					`;
+				}
+			}
+
+			default: {
+				throw new Error(`cannot write given width: ${nb_write}`);
+			}
+		}
+	}
+
 	writerUintLE(nb_write) {
-		let f_writer = H_FAST_WRITES_LE[nb_write];
+		let f_writer = H_FAST_WRITES_UINT_LE[nb_write];
 
 		switch(nb_write) {
 			case 1: return this.append1.bind(this);
@@ -331,50 +369,67 @@ class BufferEncoder {
 
 	/**
 	 * Encode the metadata of a TypedArray to the buffer (its class type and array length)
-	 * @param  {TypedArray} at_values - the typed array to encode its metadata
+	 * @param {Class<TypedArray>} dc_array - the class of the typed array to encode
+	 * @param  {int} nl_array - length of the typed array to encode
 	 * @return {BytePosition} the updated write position
 	 */
-	metaTypedArray(at_values) {
+	metaTypedArray(dc_array, nl_array) {
 		let x_type;
-		if(at_values instanceof Uint8Array) {
-			x_type = X_ENCODING_TYPED_ARRAY_UINT8;
-		}
-		else if(at_values instanceof Uint16Array) {
-			x_type = X_ENCODING_TYPED_ARRAY_UINT16;
-		}
-		else if(at_values instanceof Uint32Array) {
-			x_type = X_ENCODING_TYPED_ARRAY_UINT32;
-		}
-		else if(at_values instanceof Int8Array) {
-			x_type = X_ENCODING_TYPED_ARRAY_INT8;
-		}
-		else if(at_values instanceof Int16Array) {
-			x_type = X_ENCODING_TYPED_ARRAY_INT16;
-		}
-		else if(at_values instanceof Int32Array) {
-			x_type = X_ENCODING_TYPED_ARRAY_INT32;
-		}
-		else if(at_values instanceof Uint8ClampedArray) {
-			x_type = X_ENCODING_TYPED_ARRAY_UINT8_CLAMPED;
-		}
-		else if(at_values instanceof Float32Array) {
-			x_type = X_ENCODING_TYPED_ARRAY_FLOAT32;
-		}
-		else if(at_values instanceof Float64Array) {
-			x_type = X_ENCODING_TYPED_ARRAY_FLOAT64;
-		}
-		else if(at_values instanceof BigInt64Array) {
-			x_type = X_ENCODING_TYPED_ARRAY_BIGINT64;
-		}
-		else if(at_values instanceof BigUint64Array) {
-			x_type = X_ENCODING_TYPED_ARRAY_BIGUINT64;
+		switch(dc_array) {
+			case Uint8Array: {
+				x_type = X_ENCODING_TYPED_ARRAY_UINT8;
+				break;
+			}
+			case Uint16Array: {
+				x_type = X_ENCODING_TYPED_ARRAY_UINT16;
+				break;
+			}
+			case Uint32Array: {
+				x_type = X_ENCODING_TYPED_ARRAY_UINT32;
+				break;
+			}
+			case Int8Array: {
+				x_type = X_ENCODING_TYPED_ARRAY_INT8;
+				break;
+			}
+			case Int16Array: {
+				x_type = X_ENCODING_TYPED_ARRAY_INT16;
+				break;
+			}
+			case Int32Array: {
+				x_type = X_ENCODING_TYPED_ARRAY_INT32;
+				break;
+			}
+			case Uint8ClampedArray: {
+				x_type = X_ENCODING_TYPED_ARRAY_UINT8_CLAMPED;
+				break;
+			}
+			case Float32Array: {
+				x_type = X_ENCODING_TYPED_ARRAY_FLOAT32;
+				break;
+			}
+			case Float64Array: {
+				x_type = X_ENCODING_TYPED_ARRAY_FLOAT64;
+				break;
+			}
+			case BigInt64Array: {
+				x_type = X_ENCODING_TYPED_ARRAY_BIGINT64;
+				break;
+			}
+			case BigUint64Array: {
+				x_type = X_ENCODING_TYPED_ARRAY_BIGUINT64;
+				break;
+			}
+			default: {
+				throw new Error(`not a typed array class: ${dc_array}`);
+			}
 		}
 
 		// typed array type
 		this.append1(x_type);
 
 		// number of elements
-		return this.vuint(at_values.length);
+		return this.vuint(nl_array);
 	}
 
 	/**
@@ -383,7 +438,7 @@ class BufferEncoder {
 	 * @return {BytePosition} the updated write position
 	 */
 	typedArray(at_values) {
-		this.metaTypedArray(at_values);
+		this.metaTypedArray(at_values.constructor, at_values.length);
 
 		// not uint8 array
 		let at_append = new Uint8Array(at_values.buffer, at_values.byteOffset, at_values.byteLength);
