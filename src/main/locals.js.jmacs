@@ -47,10 +47,10 @@ const F_WRITE_1 = (at, ib, x) => {
 		if(b_unsigned) {
 			yield /* syntax: js */ `
 				// 2 bytes
-				H_FAST_${s_what.toUpperCase()}S_INT_${b_le? 'B': 'L'}E[2],
+				H_FAST_${s_what.toUpperCase()}S_INT_${b_le? 'L': 'B'}E[2],
 
 				// 3 bytes
-				H_FAST_${s_what.toUpperCase()}S_INT_${b_le? 'B': 'L'}E[3],
+				H_FAST_${s_what.toUpperCase()}S_INT_${b_le? 'L': 'B'}E[3],
 			`
 		}
 
