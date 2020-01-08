@@ -288,7 +288,7 @@ class BufferEncoder {
 							let at_contents = this._at_contents;
 
 							// write exceeds current buffer; grow
-							if(ib_write + ${nb_write} >= at_contents.length) {
+							if(ib_write + ${nb_write} > at_contents.length) {
 								at_contents = BufferEncoder$grow(this);
 							}
 
@@ -322,7 +322,7 @@ class BufferEncoder {
 							let at_contents = this._at_contents;
 
 							// write exceeds current buffer; grow
-							if(ib_write + ${nb_write} >= at_contents.length) {
+							if(ib_write + ${nb_write} > at_contents.length) {
 								at_contents = BufferEncoder$grow(this);
 							}
 
